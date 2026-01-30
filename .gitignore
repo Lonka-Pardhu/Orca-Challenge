@@ -25,3 +25,9 @@ android/
 # OS
 .DS_Store
 Thumbs.db
+
+# Internal docs (not for repo)
+CHECKLIST.md
+app/EXPLANATION.md
+backend/EXPLANATION.md
+backend/CLAUDE.md
