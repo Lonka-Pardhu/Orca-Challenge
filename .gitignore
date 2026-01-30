@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.db
+*.db-wal
+*.db-shm
+
+# Environment files
+.env
+.env.local
+
+# Expo
+.expo/
+ios/
+android/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
