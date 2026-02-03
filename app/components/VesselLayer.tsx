@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { View } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
 import type { Vessel } from '../hooks/useVessels';
@@ -6,29 +6,6 @@ import type { Vessel } from '../hooks/useVessels';
 interface VesselLayerProps {
   vessels: Vessel[];
   minZoom?: number;
-}
-
-// Create GeoJSON from vessels
-function vesselsToGeoJSON(vessels: Vessel[]): GeoJSON.FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: vessels.map((vessel) => ({
-      type: 'Feature',
-      id: vessel.mmsi,
-      geometry: {
-        type: 'Point',
-        coordinates: [vessel.longitude, vessel.latitude],
-      },
-      properties: {
-        mmsi: vessel.mmsi,
-        name: vessel.name || 'Unknown',
-        course: vessel.course ?? 0,
-        speed: vessel.speed ?? 0,
-        heading: vessel.heading ?? vessel.course ?? 0,
-        updatedAt: vessel.updatedAt,
-      },
-    })),
-  };
 }
 
 // Boat marker component - boat shape with red bow tip
@@ -65,8 +42,6 @@ const BoatMarker = () => (
 );
 
 export function VesselLayer({ vessels, minZoom = 12 }: VesselLayerProps) {
-  const geoJSON = useMemo(() => vesselsToGeoJSON(vessels), [vessels]);
-
   if (vessels.length === 0) return null;
 
   return (

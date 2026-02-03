@@ -1,17 +1,27 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import { getVesselsInViewport, getStats, getHotspots, getSampleVessels, closeDb } from './db';
-import { connect as connectAIS, disconnect as disconnectAIS, getStatus } from './aisClient';
-import { ViewportQuery } from './types';
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import {
+  getVesselsInViewport,
+  getStats,
+  getHotspots,
+  getSampleVessels,
+  closeDb,
+} from "./db";
+import {
+  connect as connectAIS,
+  disconnect as disconnectAIS,
+  getStatus,
+} from "./aisClient";
+import { ViewportQuery } from "./types";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const AIS_API_KEY = process.env.AIS_API_KEY;
 
 if (!AIS_API_KEY) {
-  console.error('ERROR: AIS_API_KEY environment variable is required');
-  console.error('Get your free API key at https://aisstream.io');
+  console.error("ERROR: AIS_API_KEY environment variable is required");
+  console.error("Get your free API key at https://aisstream.io");
   process.exit(1);
 }
 
@@ -20,13 +30,14 @@ app.use(cors());
 app.use(express.json());
 
 // GET /vessels - Returns vessels within viewport
-app.get('/vessels', (req, res) => {
+app.get("/vessels", (req, res) => {
   const { minLat, maxLat, minLon, maxLon } = req.query;
 
   // Validate required parameters
   if (!minLat || !maxLat || !minLon || !maxLon) {
     return res.status(400).json({
-      error: 'Missing required query parameters: minLat, maxLat, minLon, maxLon',
+      error:
+        "Missing required query parameters: minLat, maxLat, minLon, maxLon",
     });
   }
 
@@ -40,7 +51,24 @@ app.get('/vessels', (req, res) => {
   // Validate parsed values
   if (Object.values(query).some(isNaN)) {
     return res.status(400).json({
-      error: 'Query parameters must be valid numbers',
+      error: "Query parameters must be valid numbers",
+    });
+  }
+
+  // Validate viewport bounds: min <= max
+  if (query.minLat > query.maxLat || query.minLon > query.maxLon) {
+    return res.status(400).json({
+      error:
+        "Invalid viewport: minLat must be <= maxLat and minLon must be <= maxLon",
+    });
+  }
+
+  // Reject unreasonably large viewports (full world or more)
+  const latSpan = query.maxLat - query.minLat;
+  const lonSpan = query.maxLon - query.minLon;
+  if (latSpan > 180 || lonSpan > 360) {
+    return res.status(400).json({
+      error: "Viewport too large: limit lat span to 180° and lon span to 360°",
     });
   }
 
@@ -52,18 +80,18 @@ app.get('/vessels', (req, res) => {
       timestamp: Date.now(),
     });
   } catch (err) {
-    console.error('Error fetching vessels:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error("Error fetching vessels:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // GET /status - Returns server and AIS connection status
-app.get('/status', (_req, res) => {
+app.get("/status", (_req, res) => {
   const aisStatus = getStatus();
   const dbStats = getStats();
 
   res.json({
-    server: 'running',
+    server: "running",
     ais: aisStatus,
     database: dbStats,
     timestamp: Date.now(),
@@ -71,12 +99,12 @@ app.get('/status', (_req, res) => {
 });
 
 // Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' });
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok" });
 });
 
 // GET /hotspots - Returns areas with most vessels (for finding ships)
-app.get('/hotspots', (_req, res) => {
+app.get("/hotspots", (_req, res) => {
   try {
     const hotspots = getHotspots();
     const samples = getSampleVessels();
@@ -84,18 +112,20 @@ app.get('/hotspots', (_req, res) => {
     res.json({
       hotspots,
       sampleVessels: samples,
-      tip: 'Navigate to these coordinates (zoom level 12+) to see vessels',
+      tip: "Navigate to these coordinates (zoom level 12+) to see vessels",
     });
   } catch (err) {
-    console.error('Error fetching hotspots:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error("Error fetching hotspots:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // Start server
 const server = app.listen(PORT, () => {
-  console.log(`[Server] AIS Viewer backend running on http://localhost:${PORT}`);
-  console.log('[Server] Endpoints:');
+  console.log(
+    `[Server] AIS Viewer backend running on http://localhost:${PORT}`,
+  );
+  console.log("[Server] Endpoints:");
   console.log(`  GET /vessels?minLat=X&maxLat=X&minLon=X&maxLon=X`);
   console.log(`  GET /status`);
   console.log(`  GET /health`);
@@ -109,24 +139,24 @@ setInterval(() => {
   const status = getStatus();
   const stats = getStats();
   console.log(
-    `[Status] AIS ${status.connected ? 'connected' : 'disconnected'} | ` +
+    `[Status] AIS ${status.connected ? "connected" : "disconnected"} | ` +
       `Messages: ${status.messageCount} | ` +
-      `DB Total: ${stats.total} | Recent (2min): ${stats.recent}`
+      `DB Total: ${stats.total} | Recent (10min): ${stats.recent}`,
   );
 }, 30000);
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n[Server] Shutting down...');
+process.on("SIGINT", () => {
+  console.log("\n[Server] Shutting down...");
   disconnectAIS();
   closeDb();
   server.close(() => {
-    console.log('[Server] Goodbye!');
+    console.log("[Server] Goodbye!");
     process.exit(0);
   });
 });
 
-process.on('SIGTERM', () => {
+process.on("SIGTERM", () => {
   disconnectAIS();
   closeDb();
   server.close();

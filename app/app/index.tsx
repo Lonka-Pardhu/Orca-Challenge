@@ -32,9 +32,10 @@ export default function MapScreen() {
 
   const shouldShowVessels = currentZoom >= MIN_VESSEL_ZOOM;
 
+  // Poll every 3s to meet "max 10s delay from backend to map" requirement
   const { vessels, isLoading, error, lastUpdated, fetchVessels } = useVessels({
     apiUrl: API_URL,
-    pollingInterval: 5000,
+    pollingInterval: 3000,
     enabled: shouldShowVessels && viewportBounds !== null,
   });
 

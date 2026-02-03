@@ -1,13 +1,16 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import { Vessel, ViewportQuery } from './types';
+import Database from "better-sqlite3";
+import path from "path";
+import { Vessel, ViewportQuery } from "./types";
 
-const DB_PATH = path.join(__dirname, '..', 'vessels.db');
+const DB_PATH = path.join(__dirname, "..", "vessels.db");
+
+// Requirement: most vessels are relatively fresh (updated within 10 minutes)
+const FRESHNESS_MS = 10 * 60 * 1000; // 10 minutes
 
 const db = new Database(DB_PATH);
 
 // Enable WAL mode for better concurrent performance
-db.pragma('journal_mode = WAL');
+db.pragma("journal_mode = WAL");
 
 // Initialize database schema
 db.exec(`
@@ -57,7 +60,9 @@ const getStatsStmt = db.prepare(`
   FROM vessels
 `);
 
-export function upsertVessel(vessel: Omit<Vessel, 'updatedAt'> & { updatedAt?: number }): void {
+export function upsertVessel(
+  vessel: Omit<Vessel, "updatedAt"> & { updatedAt?: number },
+): void {
   upsertStmt.run({
     mmsi: vessel.mmsi,
     name: vessel.name,
@@ -70,7 +75,10 @@ export function upsertVessel(vessel: Omit<Vessel, 'updatedAt'> & { updatedAt?: n
   });
 }
 
-export function getVesselsInViewport(query: ViewportQuery, maxAgeMs: number = 120000): Vessel[] {
+export function getVesselsInViewport(
+  query: ViewportQuery,
+  maxAgeMs: number = FRESHNESS_MS,
+): Vessel[] {
   const minTime = Date.now() - maxAgeMs;
   return queryViewportStmt.all({
     ...query,
@@ -79,12 +87,12 @@ export function getVesselsInViewport(query: ViewportQuery, maxAgeMs: number = 12
 }
 
 export function getStats(): { total: number; recent: number } {
-  const twoMinutesAgo = Date.now() - 120000;
-  return getStatsStmt.get({ recentTime: twoMinutesAgo }) as { total: number; recent: number };
+  const recentTime = Date.now() - FRESHNESS_MS;
+  return getStatsStmt.get({ recentTime }) as { total: number; recent: number };
 }
 
 export function getHotspots(): { lat: number; lon: number; count: number }[] {
-  const twoMinutesAgo = Date.now() - 120000;
+  const recentTime = Date.now() - FRESHNESS_MS;
   const hotspotsStmt = db.prepare(`
     SELECT
       ROUND(latitude, 0) as lat,
@@ -97,11 +105,19 @@ export function getHotspots(): { lat: number; lon: number; count: number }[] {
     ORDER BY count DESC
     LIMIT 20
   `);
-  return hotspotsStmt.all(twoMinutesAgo) as { lat: number; lon: number; count: number }[];
+  return hotspotsStmt.all(recentTime) as {
+    lat: number;
+    lon: number;
+    count: number;
+  }[];
 }
 
-export function getSampleVessels(): { name: string; latitude: number; longitude: number }[] {
-  const twoMinutesAgo = Date.now() - 120000;
+export function getSampleVessels(): {
+  name: string;
+  latitude: number;
+  longitude: number;
+}[] {
+  const recentTime = Date.now() - FRESHNESS_MS;
   const sampleStmt = db.prepare(`
     SELECT name, latitude, longitude
     FROM vessels
@@ -109,7 +125,11 @@ export function getSampleVessels(): { name: string; latitude: number; longitude:
     ORDER BY RANDOM()
     LIMIT 10
   `);
-  return sampleStmt.all(twoMinutesAgo) as { name: string; latitude: number; longitude: number }[];
+  return sampleStmt.all(recentTime) as {
+    name: string;
+    latitude: number;
+    longitude: number;
+  }[];
 }
 
 export function closeDb(): void {

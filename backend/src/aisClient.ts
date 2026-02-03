@@ -11,7 +11,7 @@ let lastMessageTime = Date.now();
 
 function createSubscription(apiKey: string): AISSubscription {
   return {
-    APIKey: "your_aisstream_api_key",
+    APIKey: apiKey,
     // Global bounding box to receive all vessels
     BoundingBoxes: [
       [

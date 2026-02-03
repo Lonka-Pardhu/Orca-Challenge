@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from "react";
 
 export interface Vessel {
   mmsi: string;
@@ -45,54 +45,66 @@ export function useVessels({
   const boundsRef = useRef<ViewportBounds | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchVessels = useCallback(async (bounds: ViewportBounds) => {
-    boundsRef.current = bounds;
+  const fetchVessels = useCallback(
+    async (bounds: ViewportBounds) => {
+      boundsRef.current = bounds;
 
-    if (!enabled) {
-      console.log('[useVessels] Fetch skipped - not enabled');
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      setError(null);
-
-      const params = new URLSearchParams({
-        minLat: bounds.minLat.toString(),
-        maxLat: bounds.maxLat.toString(),
-        minLon: bounds.minLon.toString(),
-        maxLon: bounds.maxLon.toString(),
-      });
-
-      const url = `${apiUrl}/vessels?${params}`;
-      console.log('[useVessels] Fetching:', url);
-
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error(`HTTP error: ${response.status}`);
+      if (!enabled) {
+        console.log("[useVessels] Fetch skipped - not enabled");
+        return;
       }
 
-      const data = await response.json();
-      console.log('[useVessels] Response:', data.count, 'vessels from server');
+      try {
+        setIsLoading(true);
+        setError(null);
 
-      // Filter out vessels older than 2 minutes (client-side double-check)
-      const twoMinutesAgo = Date.now() - 120000;
-      const freshVessels = data.vessels.filter(
-        (v: Vessel) => v.updatedAt >= twoMinutesAgo
-      );
+        const params = new URLSearchParams({
+          minLat: bounds.minLat.toString(),
+          maxLat: bounds.maxLat.toString(),
+          minLon: bounds.minLon.toString(),
+          maxLon: bounds.maxLon.toString(),
+        });
 
-      console.log('[useVessels] After freshness filter:', freshVessels.length, 'vessels');
-      setVessels(freshVessels);
-      setLastUpdated(Date.now());
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to fetch vessels';
-      console.log('[useVessels] Error:', errorMsg);
-      setError(errorMsg);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [apiUrl, enabled]);
+        const url = `${apiUrl}/vessels?${params}`;
+        console.log("[useVessels] Fetching:", url);
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          throw new Error(`HTTP error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log(
+          "[useVessels] Response:",
+          data.count,
+          "vessels from server",
+        );
+
+        // Frontend requirement: only show vessels updated in the past 2 minutes
+        const DISPLAY_FRESHNESS_MS = 2 * 60 * 1000;
+        const freshVessels = data.vessels.filter(
+          (v: Vessel) => v.updatedAt >= Date.now() - DISPLAY_FRESHNESS_MS,
+        );
+
+        console.log(
+          "[useVessels] After freshness filter:",
+          freshVessels.length,
+          "vessels",
+        );
+        setVessels(freshVessels);
+        setLastUpdated(Date.now());
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to fetch vessels";
+        console.log("[useVessels] Error:", errorMsg);
+        setError(errorMsg);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [apiUrl, enabled],
+  );
 
   // Set up polling
   useEffect(() => {
