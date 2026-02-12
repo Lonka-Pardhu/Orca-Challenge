@@ -1,137 +1,206 @@
-import Database from "better-sqlite3";
-import path from "path";
+import { MongoClient, Collection, AnyBulkWriteOperation } from "mongodb";
 import { Vessel, ViewportQuery } from "./types";
 
-const DB_PATH = path.join(__dirname, "..", "vessels.db");
+const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017";
+const DB_NAME = "ais_viewer";
+const COLLECTION_NAME = "vessels";
 
 // Requirement: most vessels are relatively fresh (updated within 10 minutes)
-const FRESHNESS_MS = 10 * 60 * 1000; // 10 minutes
+const FRESHNESS_MS = 10 * 60 * 1000;
 
-const db = new Database(DB_PATH);
+// MongoDB document shape with GeoJSON location
+interface VesselDoc {
+  _id: string; // MMSI as natural unique key
+  name: string | null;
+  location: {
+    type: "Point";
+    coordinates: [number, number]; // [longitude, latitude]
+  };
+  course: number | null;
+  speed: number | null;
+  heading: number | null;
+  updatedAt: Date;
+}
 
-// Enable WAL mode for better concurrent performance
-db.pragma("journal_mode = WAL");
+let client: MongoClient;
+let vessels: Collection<VesselDoc>;
 
-// Initialize database schema
-db.exec(`
-  CREATE TABLE IF NOT EXISTS vessels (
-    mmsi TEXT PRIMARY KEY,
-    name TEXT,
-    latitude REAL NOT NULL,
-    longitude REAL NOT NULL,
-    course REAL,
-    speed REAL,
-    heading REAL,
-    updated_at INTEGER NOT NULL
-  );
+// Batch write buffer for high-throughput AIS ingestion
+let writeBuffer: AnyBulkWriteOperation<VesselDoc>[] = [];
+const BATCH_SIZE = 100;
+const FLUSH_INTERVAL_MS = 1000;
+let flushTimer: NodeJS.Timeout | null = null;
 
-  CREATE INDEX IF NOT EXISTS idx_vessels_location ON vessels(latitude, longitude);
-  CREATE INDEX IF NOT EXISTS idx_vessels_updated ON vessels(updated_at);
-`);
+async function flushWrites(): Promise<void> {
+  if (writeBuffer.length === 0) return;
+  const ops = writeBuffer.splice(0);
+  try {
+    await vessels.bulkWrite(ops, { ordered: false });
+  } catch (err) {
+    console.error("[DB] Bulk write error:", err);
+  }
+}
 
-// Prepared statements for better performance
-const upsertStmt = db.prepare(`
-  INSERT INTO vessels (mmsi, name, latitude, longitude, course, speed, heading, updated_at)
-  VALUES (@mmsi, @name, @latitude, @longitude, @course, @speed, @heading, @updatedAt)
-  ON CONFLICT(mmsi) DO UPDATE SET
-    name = COALESCE(@name, vessels.name),
-    latitude = @latitude,
-    longitude = @longitude,
-    course = @course,
-    speed = @speed,
-    heading = @heading,
-    updated_at = @updatedAt
-`);
+export async function connectDb(): Promise<void> {
+  client = new MongoClient(MONGO_URI);
+  await client.connect();
+  const db = client.db(DB_NAME);
+  vessels = db.collection<VesselDoc>(COLLECTION_NAME);
 
-const queryViewportStmt = db.prepare(`
-  SELECT mmsi, name, latitude, longitude, course, speed, heading, updated_at as updatedAt
-  FROM vessels
-  WHERE latitude >= @minLat AND latitude <= @maxLat
-    AND longitude >= @minLon AND longitude <= @maxLon
-    AND updated_at >= @minTime
-  ORDER BY updated_at DESC
-  LIMIT 1000
-`);
+  // Create geospatial and time indexes (idempotent)
+  await vessels.createIndex({ location: "2dsphere" });
+  await vessels.createIndex({ updatedAt: 1 });
 
-const getStatsStmt = db.prepare(`
-  SELECT
-    COUNT(*) as total,
-    SUM(CASE WHEN updated_at >= @recentTime THEN 1 ELSE 0 END) as recent
-  FROM vessels
-`);
+  // Start periodic flush for batched writes
+  flushTimer = setInterval(flushWrites, FLUSH_INTERVAL_MS);
+
+  console.log("[DB] Connected to MongoDB with 2dsphere geospatial index");
+}
 
 export function upsertVessel(
   vessel: Omit<Vessel, "updatedAt"> & { updatedAt?: number },
 ): void {
-  upsertStmt.run({
-    mmsi: vessel.mmsi,
-    name: vessel.name,
-    latitude: vessel.latitude,
-    longitude: vessel.longitude,
-    course: vessel.course,
-    speed: vessel.speed,
-    heading: vessel.heading,
-    updatedAt: vessel.updatedAt ?? Date.now(),
+  const now = vessel.updatedAt ? new Date(vessel.updatedAt) : new Date();
+
+  writeBuffer.push({
+    updateOne: {
+      filter: { _id: vessel.mmsi },
+      update: {
+        $set: {
+          name: vessel.name,
+          location: {
+            type: "Point" as const,
+            coordinates: [vessel.longitude, vessel.latitude], // [lon, lat]
+          },
+          course: vessel.course,
+          speed: vessel.speed,
+          heading: vessel.heading,
+          updatedAt: now,
+        },
+      },
+      upsert: true,
+    },
   });
+
+  // Flush when buffer is full
+  if (writeBuffer.length >= BATCH_SIZE) {
+    flushWrites();
+  }
 }
 
-export function getVesselsInViewport(
+export async function getVesselsInViewport(
   query: ViewportQuery,
   maxAgeMs: number = FRESHNESS_MS,
-): Vessel[] {
-  const minTime = Date.now() - maxAgeMs;
-  return queryViewportStmt.all({
-    ...query,
-    minTime,
-  }) as Vessel[];
+): Promise<Vessel[]> {
+  const minTime = new Date(Date.now() - maxAgeMs);
+
+  const docs = await vessels
+    .find({
+      location: {
+        $geoWithin: {
+          $geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [query.minLon, query.minLat],
+                [query.maxLon, query.minLat],
+                [query.maxLon, query.maxLat],
+                [query.minLon, query.maxLat],
+                [query.minLon, query.minLat], // close the ring
+              ],
+            ],
+          },
+        },
+      },
+      updatedAt: { $gte: minTime },
+    })
+    .limit(1000)
+    .toArray();
+
+  // Map back to Vessel interface (keeps API response identical)
+  return docs.map((doc) => ({
+    mmsi: doc._id,
+    name: doc.name,
+    latitude: doc.location.coordinates[1],
+    longitude: doc.location.coordinates[0],
+    course: doc.course,
+    speed: doc.speed,
+    heading: doc.heading,
+    updatedAt: doc.updatedAt.getTime(),
+  }));
 }
 
-export function getStats(): { total: number; recent: number } {
-  const recentTime = Date.now() - FRESHNESS_MS;
-  return getStatsStmt.get({ recentTime }) as { total: number; recent: number };
+export async function getStats(): Promise<{ total: number; recent: number }> {
+  const recentTime = new Date(Date.now() - FRESHNESS_MS);
+
+  const [total, recent] = await Promise.all([
+    vessels.countDocuments(),
+    vessels.countDocuments({ updatedAt: { $gte: recentTime } }),
+  ]);
+
+  return { total, recent };
 }
 
-export function getHotspots(): { lat: number; lon: number; count: number }[] {
-  const recentTime = Date.now() - FRESHNESS_MS;
-  const hotspotsStmt = db.prepare(`
-    SELECT
-      ROUND(latitude, 0) as lat,
-      ROUND(longitude, 0) as lon,
-      COUNT(*) as count
-    FROM vessels
-    WHERE updated_at >= ?
-    GROUP BY ROUND(latitude, 0), ROUND(longitude, 0)
-    HAVING COUNT(*) >= 5
-    ORDER BY count DESC
-    LIMIT 20
-  `);
-  return hotspotsStmt.all(recentTime) as {
-    lat: number;
-    lon: number;
-    count: number;
-  }[];
+export async function getHotspots(): Promise<
+  { lat: number; lon: number; count: number }[]
+> {
+  const recentTime = new Date(Date.now() - FRESHNESS_MS);
+
+  const results = await vessels
+    .aggregate<{ _id: { lat: number; lon: number }; count: number }>([
+      { $match: { updatedAt: { $gte: recentTime } } },
+      {
+        $group: {
+          _id: {
+            lat: {
+              $round: [{ $arrayElemAt: ["$location.coordinates", 1] }, 0],
+            },
+            lon: {
+              $round: [{ $arrayElemAt: ["$location.coordinates", 0] }, 0],
+            },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $match: { count: { $gte: 5 } } },
+      { $sort: { count: -1 } },
+      { $limit: 20 },
+    ])
+    .toArray();
+
+  return results.map((r) => ({
+    lat: r._id.lat,
+    lon: r._id.lon,
+    count: r.count,
+  }));
 }
 
-export function getSampleVessels(): {
-  name: string;
-  latitude: number;
-  longitude: number;
-}[] {
-  const recentTime = Date.now() - FRESHNESS_MS;
-  const sampleStmt = db.prepare(`
-    SELECT name, latitude, longitude
-    FROM vessels
-    WHERE updated_at >= ? AND name IS NOT NULL AND name != ''
-    ORDER BY RANDOM()
-    LIMIT 10
-  `);
-  return sampleStmt.all(recentTime) as {
-    name: string;
-    latitude: number;
-    longitude: number;
-  }[];
+export async function getSampleVessels(): Promise<
+  { name: string; latitude: number; longitude: number }[]
+> {
+  const recentTime = new Date(Date.now() - FRESHNESS_MS);
+
+  const docs = await vessels
+    .aggregate<VesselDoc>([
+      {
+        $match: {
+          updatedAt: { $gte: recentTime },
+          name: { $nin: [null, ""] },
+        },
+      },
+      { $sample: { size: 10 } },
+    ])
+    .toArray();
+
+  return docs.map((d) => ({
+    name: d.name || "",
+    latitude: d.location.coordinates[1],
+    longitude: d.location.coordinates[0],
+  }));
 }
 
-export function closeDb(): void {
-  db.close();
+export async function closeDb(): Promise<void> {
+  if (flushTimer) clearInterval(flushTimer);
+  await flushWrites(); // Flush remaining writes
+  await client?.close();
 }

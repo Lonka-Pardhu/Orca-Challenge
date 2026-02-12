@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import {
+  connectDb,
   getVesselsInViewport,
   getStats,
   getHotspots,
@@ -30,7 +31,7 @@ app.use(cors());
 app.use(express.json());
 
 // GET /vessels - Returns vessels within viewport
-app.get("/vessels", (req, res) => {
+app.get("/vessels", async (req, res) => {
   const { minLat, maxLat, minLon, maxLon } = req.query;
 
   // Validate required parameters
@@ -73,7 +74,7 @@ app.get("/vessels", (req, res) => {
   }
 
   try {
-    const vessels = getVesselsInViewport(query);
+    const vessels = await getVesselsInViewport(query);
     res.json({
       vessels,
       count: vessels.length,
@@ -86,9 +87,9 @@ app.get("/vessels", (req, res) => {
 });
 
 // GET /status - Returns server and AIS connection status
-app.get("/status", (_req, res) => {
+app.get("/status", async (_req, res) => {
   const aisStatus = getStatus();
-  const dbStats = getStats();
+  const dbStats = await getStats();
 
   res.json({
     server: "running",
@@ -104,10 +105,12 @@ app.get("/health", (_req, res) => {
 });
 
 // GET /hotspots - Returns areas with most vessels (for finding ships)
-app.get("/hotspots", (_req, res) => {
+app.get("/hotspots", async (_req, res) => {
   try {
-    const hotspots = getHotspots();
-    const samples = getSampleVessels();
+    const [hotspots, samples] = await Promise.all([
+      getHotspots(),
+      getSampleVessels(),
+    ]);
 
     res.json({
       hotspots,
@@ -120,45 +123,52 @@ app.get("/hotspots", (_req, res) => {
   }
 });
 
-// Start server
-const server = app.listen(PORT, () => {
-  console.log(
-    `[Server] AIS Viewer backend running on http://localhost:${PORT}`,
-  );
-  console.log("[Server] Endpoints:");
-  console.log(`  GET /vessels?minLat=X&maxLat=X&minLon=X&maxLon=X`);
-  console.log(`  GET /status`);
-  console.log(`  GET /health`);
+let server: ReturnType<typeof app.listen>;
 
-  // Connect to AIS stream
-  connectAIS(AIS_API_KEY);
+async function main() {
+  // Connect to MongoDB before starting the server
+  await connectDb();
+
+  server = app.listen(PORT, () => {
+    console.log(
+      `[Server] AIS Viewer backend running on http://localhost:${PORT}`,
+    );
+    console.log("[Server] Endpoints:");
+    console.log(`  GET /vessels?minLat=X&maxLat=X&minLon=X&maxLon=X`);
+    console.log(`  GET /status`);
+    console.log(`  GET /health`);
+
+    // Connect to AIS stream
+    connectAIS(AIS_API_KEY!);
+  });
+
+  // Periodic status logging
+  setInterval(async () => {
+    const status = getStatus();
+    const stats = await getStats();
+    console.log(
+      `[Status] AIS ${status.connected ? "connected" : "disconnected"} | ` +
+        `Messages: ${status.messageCount} | ` +
+        `DB Total: ${stats.total} | Recent (10min): ${stats.recent}`,
+    );
+  }, 30000);
+}
+
+main().catch((err) => {
+  console.error("[Server] Failed to start:", err);
+  process.exit(1);
 });
 
-// Periodic status logging
-setInterval(() => {
-  const status = getStatus();
-  const stats = getStats();
-  console.log(
-    `[Status] AIS ${status.connected ? "connected" : "disconnected"} | ` +
-      `Messages: ${status.messageCount} | ` +
-      `DB Total: ${stats.total} | Recent (10min): ${stats.recent}`,
-  );
-}, 30000);
-
 // Graceful shutdown
-process.on("SIGINT", () => {
+async function shutdown() {
   console.log("\n[Server] Shutting down...");
   disconnectAIS();
-  closeDb();
-  server.close(() => {
+  await closeDb();
+  server?.close(() => {
     console.log("[Server] Goodbye!");
     process.exit(0);
   });
-});
+}
 
-process.on("SIGTERM", () => {
-  disconnectAIS();
-  closeDb();
-  server.close();
-  process.exit(0);
-});
+process.on("SIGINT", () => shutdown());
+process.on("SIGTERM", () => shutdown());
