@@ -13,12 +13,8 @@ orca-challenge/
 
 ## Prerequisites
 
-1. **Mapbox Account** — Get a free access token at https://account.mapbox.com
-2. **AISStream Account** — Get a free API key at https://aisstream.io
-3. **MongoDB Atlas Account** — Create a free cluster at https://www.mongodb.com/atlas
-   - Create a database user with read/write access
-   - Add `0.0.0.0/0` to the IP Access List (for development)
-   - Copy the connection string (starts with `mongodb+srv://`)
+- Node.js (v18+)
+- API keys are provided in the email. Create `.env` files as shown below.
 
 ## Quick Start
 
@@ -27,17 +23,13 @@ orca-challenge/
 ```bash
 cd backend
 npm install
-
-# Create .env file
-cp .env.example .env
-# Edit .env and add your AIS_API_KEY and MONGO_URI
 ```
 
-Your `backend/.env` should look like:
+Create `backend/.env` with the keys provided in the email:
 ```
-AIS_API_KEY=your_aisstream_api_key
+AIS_API_KEY=<provided in email>
 PORT=3001
-MONGO_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/
+MONGO_URI=<provided in email>
 ```
 
 Start the server:
@@ -56,11 +48,12 @@ The backend will:
 ```bash
 cd app
 npm install
+```
 
-# Create .env file
-cp .env.example .env
-# Edit .env and add your EXPO_PUBLIC_MAPBOX_TOKEN
-# Update EXPO_PUBLIC_API_URL if testing on a physical device (use your machine's local IP)
+Create `app/.env` with the keys provided in the email:
+```
+EXPO_PUBLIC_MAPBOX_TOKEN=<provided in email>
+EXPO_PUBLIC_API_URL=http://localhost:3001
 ```
 
 Start Expo:
