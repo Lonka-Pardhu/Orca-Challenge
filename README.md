@@ -2,6 +2,12 @@
 
 Real-time ship tracking system built for the [Orca AIS Viewer Challenge](https://github.com/orca-io/orca-challenges/tree/master/challenge-ais-viewer). Ingests live AIS data from aisstream.io and displays vessels on a Mapbox map with directional markers.
 
+
+
+https://github.com/user-attachments/assets/1f8a1969-3dc5-4892-849f-3b11fcd08ca9
+
+
+
 ## Project Structure
 
 ```
