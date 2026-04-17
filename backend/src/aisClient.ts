@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import { AISMessage, AISSubscription } from "./types";
-import { upsertVessel } from "./db";
+import { upsertVessel, upsertVesselStatic } from "./db";
 
 const AIS_STREAM_URL = "wss://stream.aisstream.io/v0/stream";
 
@@ -19,7 +19,7 @@ function createSubscription(apiKey: string): AISSubscription {
         [90, 180],
       ],
     ],
-    FilterMessageTypes: ["PositionReport"],
+    FilterMessageTypes: ["PositionReport", "ShipStaticData"],
   };
 }
 
@@ -45,6 +45,40 @@ function processMessage(data: AISMessage): void {
   lastMessageTime = Date.now();
 }
 
+function processStaticData(data: {
+  MessageType: string;
+  MetaData: { MMSI: number; MMSI_String: string; ShipName: string };
+  Message: {
+    ShipStaticData: {
+      ImoNumber: number;
+      CallSign: string;
+      Destination: string;
+      Type: number;
+      MaximumStaticDraught: number;
+      Dimension: { A: number; B: number; C: number; D: number };
+    };
+  };
+}): void {
+  const { MetaData } = data;
+  const staticData = data.Message.ShipStaticData;
+
+  upsertVesselStatic(MetaData.MMSI_String, {
+    name: MetaData.ShipName?.trim() || null,
+    shipType: staticData.Type,
+    imo: staticData.ImoNumber ? String(staticData.ImoNumber) : undefined,
+    callSign: staticData.CallSign?.trim() || undefined,
+    destination: staticData.Destination?.trim() || undefined,
+    draught: staticData.MaximumStaticDraught || undefined,
+    dimensionA: staticData.Dimension?.A,
+    dimensionB: staticData.Dimension?.B,
+    dimensionC: staticData.Dimension?.C,
+    dimensionD: staticData.Dimension?.D,
+  });
+
+  messageCount++;
+  lastMessageTime = Date.now();
+}
+
 export function connect(apiKey: string): void {
   if (ws) {
     ws.close();
@@ -63,9 +97,11 @@ export function connect(apiKey: string): void {
 
   ws.on("message", (rawData) => {
     try {
-      const data = JSON.parse(rawData.toString()) as AISMessage;
+      const data = JSON.parse(rawData.toString());
       if (data.MessageType === "PositionReport") {
-        processMessage(data);
+        processMessage(data as AISMessage);
+      } else if (data.MessageType === "ShipStaticData") {
+        processStaticData(data);
       }
     } catch (err) {
       console.error("[AIS] Error parsing message:", err);

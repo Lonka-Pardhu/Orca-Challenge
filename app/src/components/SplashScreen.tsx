@@ -5,7 +5,7 @@ interface SplashScreenProps {
   onAnimationComplete: () => void;
 }
 
-const LETTERS = ['O', 'R', 'C', 'A'];
+const LETTERS = ['S', 'e', 'a', 'T', 'r', 'a', 'c', 'k'];
 
 export function SplashScreen({ onAnimationComplete }: SplashScreenProps) {
   const letterOpacities = useRef(LETTERS.map(() => new Animated.Value(0))).current;
@@ -21,7 +21,7 @@ export function SplashScreen({ onAnimationComplete }: SplashScreenProps) {
     );
 
     Animated.sequence([
-      Animated.stagger(300, letterAnims),
+      Animated.stagger(150, letterAnims),
       Animated.delay(400),
       Animated.timing(splashOpacity, {
         toValue: 0,
@@ -38,7 +38,7 @@ export function SplashScreen({ onAnimationComplete }: SplashScreenProps) {
       <View style={styles.letterRow}>
         {LETTERS.map((letter, i) => (
           <Animated.Text
-            key={letter}
+            key={`${letter}-${i}`}
             style={[styles.letter, { opacity: letterOpacities[i] }]}
           >
             {letter}
@@ -52,7 +52,7 @@ export function SplashScreen({ onAnimationComplete }: SplashScreenProps) {
 const styles = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000000',
+    backgroundColor: '#0c1d33',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 999,
@@ -61,9 +61,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   letter: {
-    fontSize: 64,
+    fontSize: 52,
     fontWeight: '700',
     color: '#ffffff',
-    marginHorizontal: 8,
+    marginHorizontal: 3,
   },
 });

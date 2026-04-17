@@ -1,11 +1,11 @@
-import { MongoClient, Collection, AnyBulkWriteOperation } from "mongodb";
-import { Vessel, ViewportQuery } from "./types";
+import { MongoClient, Collection, AnyBulkWriteOperation, ObjectId } from "mongodb";
+import { Vessel, VesselDetail, ViewportQuery, Route, Waypoint } from "./types";
 
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017";
 const DB_NAME = "ais_viewer";
 const COLLECTION_NAME = "vessels";
 
-// Requirement: most vessels are relatively fresh (updated within 10 minutes)
+// Only show vessels updated within the last 10 minutes
 const FRESHNESS_MS = 10 * 60 * 1000;
 
 // MongoDB document shape with GeoJSON location
@@ -22,8 +22,24 @@ interface VesselDoc {
   updatedAt: Date;
 }
 
+interface WeatherCacheDoc {
+  _id: string;
+  data: unknown;
+  fetchedAt: Date;
+}
+
+interface RouteDoc {
+  _id?: string;
+  name: string;
+  waypoints: { lat: number; lon: number; name?: string }[];
+  createdAt: number;
+  updatedAt?: number;
+}
+
 let client: MongoClient;
 let vessels: Collection<VesselDoc>;
+let routesCollection: Collection<RouteDoc>;
+let weatherCacheCollection: Collection<WeatherCacheDoc>;
 
 // Batch write buffer for high-throughput AIS ingestion
 let writeBuffer: AnyBulkWriteOperation<VesselDoc>[] = [];
@@ -47,9 +63,18 @@ export async function connectDb(): Promise<void> {
   const db = client.db(DB_NAME);
   vessels = db.collection<VesselDoc>(COLLECTION_NAME);
 
+  routesCollection = db.collection<RouteDoc>("routes");
+  weatherCacheCollection = db.collection<WeatherCacheDoc>("weather_cache");
+
   // Create geospatial and time indexes (idempotent)
   await vessels.createIndex({ location: "2dsphere" });
   await vessels.createIndex({ updatedAt: 1 });
+
+  // TTL index on weather cache — expire after 30 minutes
+  await weatherCacheCollection.createIndex(
+    { fetchedAt: 1 },
+    { expireAfterSeconds: 1800 },
+  );
 
   // Start periodic flush for batched writes
   flushTimer = setInterval(flushWrites, FLUSH_INTERVAL_MS);
@@ -83,6 +108,51 @@ export function upsertVessel(
   });
 
   // Flush when buffer is full
+  if (writeBuffer.length >= BATCH_SIZE) {
+    flushWrites();
+  }
+}
+
+export function upsertVesselStatic(
+  mmsi: string,
+  staticData: {
+    name: string | null;
+    shipType?: number;
+    imo?: string;
+    callSign?: string;
+    destination?: string;
+    draught?: number;
+    dimensionA?: number;
+    dimensionB?: number;
+    dimensionC?: number;
+    dimensionD?: number;
+  },
+): void {
+  const setFields: Record<string, unknown> = { updatedAt: new Date() };
+  if (staticData.name) setFields.name = staticData.name;
+  if (staticData.shipType !== undefined) setFields.shipType = staticData.shipType;
+  if (staticData.imo !== undefined) setFields.imo = staticData.imo;
+  if (staticData.callSign !== undefined) setFields.callSign = staticData.callSign;
+  if (staticData.destination !== undefined)
+    setFields.destination = staticData.destination;
+  if (staticData.draught !== undefined) setFields.draught = staticData.draught;
+  if (staticData.dimensionA !== undefined)
+    setFields.dimensionA = staticData.dimensionA;
+  if (staticData.dimensionB !== undefined)
+    setFields.dimensionB = staticData.dimensionB;
+  if (staticData.dimensionC !== undefined)
+    setFields.dimensionC = staticData.dimensionC;
+  if (staticData.dimensionD !== undefined)
+    setFields.dimensionD = staticData.dimensionD;
+
+  writeBuffer.push({
+    updateOne: {
+      filter: { _id: mmsi },
+      update: { $set: setFields },
+      upsert: false, // Only update existing vessels (need position first)
+    },
+  });
+
   if (writeBuffer.length >= BATCH_SIZE) {
     flushWrites();
   }
@@ -127,6 +197,7 @@ export async function getVesselsInViewport(
     speed: doc.speed,
     heading: doc.heading,
     updatedAt: doc.updatedAt.getTime(),
+    shipType: doc.shipType ?? null,
   }));
 }
 
@@ -197,6 +268,95 @@ export async function getSampleVessels(): Promise<
     latitude: d.location.coordinates[1],
     longitude: d.location.coordinates[0],
   }));
+}
+
+export function getRoutesCollection(): Collection<RouteDoc> {
+  return routesCollection;
+}
+
+export function getWeatherCacheCollection(): Collection<WeatherCacheDoc> {
+  return weatherCacheCollection;
+}
+
+export async function getVesselByMmsi(
+  mmsi: string,
+): Promise<VesselDetail | null> {
+  const doc = await vessels.findOne({ _id: mmsi });
+  if (!doc) return null;
+
+  const result: VesselDetail = {
+    mmsi: doc._id,
+    name: doc.name,
+    latitude: doc.location.coordinates[1],
+    longitude: doc.location.coordinates[0],
+    course: doc.course,
+    speed: doc.speed,
+    heading: doc.heading,
+    updatedAt: doc.updatedAt.getTime(),
+  };
+
+  // Include static data fields if present
+  const anyDoc = doc as Record<string, unknown>;
+  if (anyDoc.shipType !== undefined) result.shipType = anyDoc.shipType as number;
+  if (anyDoc.imo !== undefined) result.imo = anyDoc.imo as string;
+  if (anyDoc.callSign !== undefined) result.callSign = anyDoc.callSign as string;
+  if (anyDoc.destination !== undefined)
+    result.destination = anyDoc.destination as string;
+  if (anyDoc.draught !== undefined) result.draught = anyDoc.draught as number;
+  if (anyDoc.dimensionA !== undefined)
+    result.dimensionA = anyDoc.dimensionA as number;
+  if (anyDoc.dimensionB !== undefined)
+    result.dimensionB = anyDoc.dimensionB as number;
+  if (anyDoc.dimensionC !== undefined)
+    result.dimensionC = anyDoc.dimensionC as number;
+  if (anyDoc.dimensionD !== undefined)
+    result.dimensionD = anyDoc.dimensionD as number;
+
+  return result;
+}
+
+// ── Route CRUD helpers ──────────────────────────────────────────────
+
+export async function createRoute(
+  route: Omit<Route, "_id" | "createdAt">,
+): Promise<Route> {
+  const doc: RouteDoc = {
+    _id: new ObjectId().toHexString(),
+    name: route.name,
+    waypoints: route.waypoints,
+    createdAt: Date.now(),
+  };
+  await routesCollection.insertOne(doc as any);
+  return doc as Route;
+}
+
+export async function getAllRoutes(): Promise<Route[]> {
+  return routesCollection.find().sort({ createdAt: -1 }).toArray() as unknown as Route[];
+}
+
+export async function getRouteById(id: string): Promise<Route | null> {
+  return routesCollection.findOne({ _id: id }) as unknown as Route | null;
+}
+
+export async function updateRoute(
+  id: string,
+  updates: { name?: string; waypoints?: Waypoint[] },
+): Promise<Route | null> {
+  const setFields: Record<string, unknown> = { updatedAt: Date.now() };
+  if (updates.name !== undefined) setFields.name = updates.name;
+  if (updates.waypoints !== undefined) setFields.waypoints = updates.waypoints;
+
+  const result = await routesCollection.findOneAndUpdate(
+    { _id: id } as any,
+    { $set: setFields },
+    { returnDocument: "after" },
+  );
+  return (result as unknown as Route) || null;
+}
+
+export async function deleteRoute(id: string): Promise<boolean> {
+  const result = await routesCollection.deleteOne({ _id: id } as any);
+  return result.deletedCount === 1;
 }
 
 export async function closeDb(): Promise<void> {

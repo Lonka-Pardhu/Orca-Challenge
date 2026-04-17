@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "AIS Viewer",
-    "slug": "ais-viewer",
+    "name": "SeaTrack",
+    "slug": "seatrack",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "scheme": "ais-viewer",
+    "scheme": "seatrack",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.orca.aisviewer"
+      "bundleIdentifier": "com.seatrack.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +23,7 @@
         "backgroundColor": "#1a365d"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.orca.aisviewer"
+      "package": "com.seatrack.app"
     },
     "web": {
       "favicon": "./assets/favicon.png",

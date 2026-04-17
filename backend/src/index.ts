@@ -1,20 +1,17 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import {
-  connectDb,
-  getVesselsInViewport,
-  getStats,
-  getHotspots,
-  getSampleVessels,
-  closeDb,
-} from "./db";
+import { connectDb, getStats, closeDb } from "./db";
 import {
   connect as connectAIS,
   disconnect as disconnectAIS,
   getStatus,
 } from "./aisClient";
-import { ViewportQuery } from "./types";
+
+import vesselRouter from "./routes/vessels";
+import weatherRouter from "./routes/weather";
+import routesRouter from "./routes/routesRouter";
+import alertsRouter from "./routes/alerts";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -30,61 +27,11 @@ if (!AIS_API_KEY) {
 app.use(cors());
 app.use(express.json());
 
-// GET /vessels - Returns vessels within viewport
-app.get("/vessels", async (req, res) => {
-  const { minLat, maxLat, minLon, maxLon } = req.query;
-
-  // Validate required parameters
-  if (!minLat || !maxLat || !minLon || !maxLon) {
-    return res.status(400).json({
-      error:
-        "Missing required query parameters: minLat, maxLat, minLon, maxLon",
-    });
-  }
-
-  const query: ViewportQuery = {
-    minLat: parseFloat(minLat as string),
-    maxLat: parseFloat(maxLat as string),
-    minLon: parseFloat(minLon as string),
-    maxLon: parseFloat(maxLon as string),
-  };
-
-  // Validate parsed values
-  if (Object.values(query).some(isNaN)) {
-    return res.status(400).json({
-      error: "Query parameters must be valid numbers",
-    });
-  }
-
-  // Validate viewport bounds: min <= max
-  if (query.minLat > query.maxLat || query.minLon > query.maxLon) {
-    return res.status(400).json({
-      error:
-        "Invalid viewport: minLat must be <= maxLat and minLon must be <= maxLon",
-    });
-  }
-
-  // Reject unreasonably large viewports (full world or more)
-  const latSpan = query.maxLat - query.minLat;
-  const lonSpan = query.maxLon - query.minLon;
-  if (latSpan > 180 || lonSpan > 360) {
-    return res.status(400).json({
-      error: "Viewport too large: limit lat span to 180° and lon span to 360°",
-    });
-  }
-
-  try {
-    const vessels = await getVesselsInViewport(query);
-    res.json({
-      vessels,
-      count: vessels.length,
-      timestamp: Date.now(),
-    });
-  } catch (err) {
-    console.error("Error fetching vessels:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+// Mount route modules
+app.use(vesselRouter);
+app.use(weatherRouter);
+app.use(routesRouter);
+app.use(alertsRouter);
 
 // GET /status - Returns server and AIS connection status
 app.get("/status", async (_req, res) => {
@@ -104,25 +51,6 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-// GET /hotspots - Returns areas with most vessels (for finding ships)
-app.get("/hotspots", async (_req, res) => {
-  try {
-    const [hotspots, samples] = await Promise.all([
-      getHotspots(),
-      getSampleVessels(),
-    ]);
-
-    res.json({
-      hotspots,
-      sampleVessels: samples,
-      tip: "Navigate to these coordinates (zoom level 12+) to see vessels",
-    });
-  } catch (err) {
-    console.error("Error fetching hotspots:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
 let server: ReturnType<typeof app.listen>;
 
 async function main() {
@@ -135,6 +63,12 @@ async function main() {
     );
     console.log("[Server] Endpoints:");
     console.log(`  GET /vessels?minLat=X&maxLat=X&minLon=X&maxLon=X`);
+    console.log(`  GET /vessels/:mmsi`);
+    console.log(`  GET /hotspots`);
+    console.log(`  GET /weather?lat=X&lon=X`);
+    console.log(`  GET /tides?lat=X&lon=X`);
+    console.log(`  GET /alerts/proximity?lat=X&lon=X&course=X&speed=X`);
+    console.log(`  GET /routes`);
     console.log(`  GET /status`);
     console.log(`  GET /health`);
 
